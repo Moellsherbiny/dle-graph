@@ -24,5 +24,8 @@ export default async function DashboardLayout({
     redirect("/complete-profile");
   }
 
+  if (user.role === "TEACHER") {
+    redirect("/teacher");
+  }
   return <DashboardShell>{children}</DashboardShell>;
 }

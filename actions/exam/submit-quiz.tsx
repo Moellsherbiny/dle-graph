@@ -35,22 +35,22 @@ type SubmitQuizResult =
     };
 
 /**
- * Normalize an array of IDs.
- *
- * - Removes empty values
- * - Removes duplicates
- * - Sorts the result
- *
- * Sorting allows us to compare two sets of option IDs
- * regardless of the order in which the student selected them.
+ * Normalize an array of IDs:
+ * - Remove empty/invalid values.
+ * - Remove duplicates.
+ * - Sort IDs so selections can be compared as sets.
  */
 function normalizeIds(ids: string[]) {
-  return [...new Set(ids.filter(Boolean))].sort();
+  return [
+    ...new Set(
+      ids.filter(
+        (id): id is string => typeof id === "string" && id.trim().length > 0,
+      ),
+    ),
+  ].sort();
 }
 
-/**
- * Compare two arrays as sets.
- */
+/** Compare two arrays as sets, regardless of their original order. */
 function sameIds(a: string[], b: string[]) {
   const normalizedA = normalizeIds(a);
   const normalizedB = normalizeIds(b);
@@ -66,12 +66,7 @@ export async function submitQuizAction(
   input: SubmitQuizInput,
 ): Promise<SubmitQuizResult> {
   try {
-    /*
-     * ============================================================
-     * 1. Authentication
-     * ============================================================
-     */
-
+    // 1. Authentication
     const session = await auth();
 
     if (!session?.user?.id) {
@@ -83,13 +78,8 @@ export async function submitQuizAction(
 
     const studentId = session.user.id;
 
-    /*
-     * ============================================================
-     * 2. Validate input
-     * ============================================================
-     */
-
-    if (!input?.attemptId) {
+    // 2. Validate input
+    if (!input?.attemptId || typeof input.attemptId !== "string") {
       return {
         success: false,
         error: "معرّف المحاولة غير صالح.",
@@ -103,28 +93,7 @@ export async function submitQuizAction(
       };
     }
 
-    /*
-     * ============================================================
-     * 3. Get the attempt
-     * ============================================================
-     *
-     * We load:
-     *
-     * Attempt
-     *   └── Exam
-     *        └── Lesson
-     *
-     * And:
-     *
-     * Attempt
-     *   └── Answers
-     *        └── Question
-     *             └── Options
-     *
-     * The options are needed only on the server to calculate
-     * correctness. They are NEVER returned to the client.
-     */
-
+    // 3. Get the attempt and the server-side correct answers.
     const attempt = await prisma.examAttempt.findUnique({
       where: {
         id: input.attemptId,
@@ -145,7 +114,6 @@ export async function submitQuizAction(
             },
           },
         },
-
         answers: {
           include: {
             question: {
@@ -158,7 +126,6 @@ export async function submitQuizAction(
                 },
               },
             },
-
             selectedOptions: {
               select: {
                 optionId: true,
@@ -176,12 +143,7 @@ export async function submitQuizAction(
       };
     }
 
-    /*
-     * ============================================================
-     * 4. Security checks
-     * ============================================================
-     */
-
+    // 4. Security checks
     if (attempt.studentId !== studentId) {
       return {
         success: false,
@@ -203,12 +165,7 @@ export async function submitQuizAction(
       };
     }
 
-    /*
-     * ============================================================
-     * 5. Resolve course
-     * ============================================================
-     */
-
+    // 5. Resolve course
     const courseId =
       attempt.exam.courseId ?? attempt.exam.lesson?.courseId ?? null;
 
@@ -219,12 +176,7 @@ export async function submitQuizAction(
       };
     }
 
-    /*
-     * ============================================================
-     * 6. Verify enrollment
-     * ============================================================
-     */
-
+    // 6. Verify enrollment
     const enrollment = await prisma.enrollment.findUnique({
       where: {
         studentId_courseId: {
@@ -244,12 +196,7 @@ export async function submitQuizAction(
       };
     }
 
-    /*
-     * ============================================================
-     * 7. Validate attempt questions
-     * ============================================================
-     */
-
+    // 7. Validate attempt questions
     const attemptAnswers = attempt.answers;
 
     if (attemptAnswers.length === 0) {
@@ -259,16 +206,15 @@ export async function submitQuizAction(
       };
     }
 
-    /*
-     * Create a map for quick lookup:
-     *
-     * questionId -> submitted option IDs
-     */
-
+    // Build questionId -> selected option IDs.
     const submittedMap = new Map<string, string[]>();
 
     for (const submittedAnswer of input.answers) {
-      if (!submittedAnswer?.questionId) {
+      if (
+        !submittedAnswer ||
+        typeof submittedAnswer.questionId !== "string" ||
+        submittedAnswer.questionId.length === 0
+      ) {
         continue;
       }
 
@@ -276,28 +222,23 @@ export async function submitQuizAction(
         ? submittedAnswer.selectedOptionIds
         : [];
 
-      /*
-       * If the same question is submitted more than once,
-       * we keep the last submitted value.
-       */
-      submittedMap.set(submittedAnswer.questionId, normalizeIds(optionIds));
+      // If a question is submitted more than once, keep the last value.
+      submittedMap.set(
+        submittedAnswer.questionId,
+        normalizeIds(optionIds),
+      );
     }
 
-    /*
-     * ============================================================
-     * 8. Make sure the client didn't submit unknown questions
-     * ============================================================
-     *
-     * A student must only be able to answer questions belonging
-     * to this exact attempt.
-     */
-
+    // 8. Reject answers for questions outside this attempt.
     const attemptQuestionIds = new Set(
       attemptAnswers.map((answer) => answer.questionId),
     );
 
     for (const submittedAnswer of input.answers) {
-      if (!attemptQuestionIds.has(submittedAnswer.questionId)) {
+      if (
+        submittedAnswer?.questionId &&
+        !attemptQuestionIds.has(submittedAnswer.questionId)
+      ) {
         return {
           success: false,
           error: "تم إرسال سؤال غير مرتبط بهذه المحاولة.",
@@ -305,12 +246,7 @@ export async function submitQuizAction(
       }
     }
 
-    /*
-     * ============================================================
-     * 9. Calculate every answer
-     * ============================================================
-     */
-
+    // 9. Evaluate answers on the server.
     let correctAnswers = 0;
     let unansweredQuestions = 0;
 
@@ -318,30 +254,19 @@ export async function submitQuizAction(
       answerId: string;
       questionId: string;
       selectedOptionIds: string[];
-      correctOptionIds: string[];
       isCorrect: boolean;
     }[] = [];
 
     for (const attemptAnswer of attemptAnswers) {
       const questionId = attemptAnswer.questionId;
-
-      /*
-       * Student's selected options.
-       */
       const selectedOptionIds = submittedMap.get(questionId) ?? [];
 
-      /*
-       * All correct options according to the database.
-       */
       const correctOptionIds = normalizeIds(
         attemptAnswer.question.options
           .filter((option) => option.isCorrect)
           .map((option) => option.id),
       );
 
-      /*
-       * No answer.
-       */
       if (selectedOptionIds.length === 0) {
         unansweredQuestions++;
 
@@ -349,21 +274,13 @@ export async function submitQuizAction(
           answerId: attemptAnswer.id,
           questionId,
           selectedOptionIds: [],
-          correctOptionIds,
           isCorrect: false,
         });
 
         continue;
       }
 
-      /*
-       * Make sure the selected options actually belong
-       * to this question.
-       *
-       * This prevents someone from submitting an option ID
-       * belonging to another question.
-       */
-
+      // Every selected option must belong to this question.
       const validOptionIds = new Set(
         attemptAnswer.question.options.map((option) => option.id),
       );
@@ -379,25 +296,7 @@ export async function submitQuizAction(
         };
       }
 
-      /*
-       * The answer is correct ONLY when the two sets are
-       * exactly equal.
-       *
-       * Example:
-       *
-       * Correct: [A, C]
-       * Student: [A, C]
-       * => true
-       *
-       * Correct: [A, C]
-       * Student: [A]
-       * => false
-       *
-       * Correct: [A]
-       * Student: [A, C]
-       * => false
-       */
-
+      // The answer is correct only if the selected and correct sets match.
       const isCorrect = sameIds(selectedOptionIds, correctOptionIds);
 
       if (isCorrect) {
@@ -408,20 +307,14 @@ export async function submitQuizAction(
         answerId: attemptAnswer.id,
         questionId,
         selectedOptionIds,
-        correctOptionIds,
         isCorrect,
       });
     }
 
-    /*
-     * ============================================================
-     * 10. Calculate score
-     * ============================================================
-     */
-
+    // 10. Calculate score
     const totalQuestions = attemptAnswers.length;
-
-    const wrongAnswers = totalQuestions - correctAnswers - unansweredQuestions;
+    const wrongAnswers =
+      totalQuestions - correctAnswers - unansweredQuestions;
 
     const score =
       totalQuestions > 0
@@ -429,215 +322,226 @@ export async function submitQuizAction(
         : 0;
 
     const passed = score >= attempt.exam.passingScore;
-
     const submittedAt = new Date();
 
-    /*
-     * ============================================================
-     * 11. Transaction
-     * ============================================================
-     */
+    // Prepare batch data outside the transaction.
+    const answerIds = evaluatedAnswers.map((answer) => answer.answerId);
 
-    await prisma.$transaction(async (tx) => {
-      /*
-       * ----------------------------------------------------------
-       * A. Update answers
-       * ----------------------------------------------------------
-       */
+    const correctAnswerIds = evaluatedAnswers
+      .filter((answer) => answer.isCorrect)
+      .map((answer) => answer.answerId);
 
-      for (const evaluated of evaluatedAnswers) {
-        /*
-         * Update correctness.
-         */
-        await tx.answer.update({
+    const incorrectAnswerIds = evaluatedAnswers
+      .filter((answer) => !answer.isCorrect)
+      .map((answer) => answer.answerId);
+
+    const selectedOptionsData = evaluatedAnswers.flatMap((answer) =>
+      answer.selectedOptionIds.map((optionId) => ({
+        answerId: answer.answerId,
+        optionId,
+      })),
+    );
+
+    // 11. Transaction
+    // Claim the attempt first. This conditional update prevents two
+    // simultaneous submissions from processing the same attempt twice.
+    const submissionCompleted = await prisma.$transaction(
+      async (tx) => {
+        const claim = await tx.examAttempt.updateMany({
           where: {
-            id: evaluated.answerId,
+            id: attempt.id,
+            studentId,
+            submittedAt: null,
           },
           data: {
-            isCorrect: evaluated.isCorrect,
+            score,
+            passed,
+            submittedAt,
           },
         });
 
-        /*
-         * Remove previously stored selected options.
-         *
-         * Normally there won't be any because the attempt
-         * is being submitted for the first time, but deleting
-         * them first makes the operation idempotent and safe.
-         */
+        // Another request already submitted this attempt.
+        if (claim.count !== 1) {
+          return false;
+        }
 
-        await tx.answerOption.deleteMany({
-          where: {
-            answerId: evaluated.answerId,
-          },
-        });
+        // A. Batch update answer correctness.
+        if (correctAnswerIds.length > 0) {
+          await tx.answer.updateMany({
+            where: {
+              id: {
+                in: correctAnswerIds,
+              },
+            },
+            data: {
+              isCorrect: true,
+            },
+          });
+        }
 
-        /*
-         * Store selected options.
-         */
+        if (incorrectAnswerIds.length > 0) {
+          await tx.answer.updateMany({
+            where: {
+              id: {
+                in: incorrectAnswerIds,
+              },
+            },
+            data: {
+              isCorrect: false,
+            },
+          });
+        }
 
-        if (evaluated.selectedOptionIds.length > 0) {
+        // Replace stored selected options for this attempt in one delete.
+        if (answerIds.length > 0) {
+          await tx.answerOption.deleteMany({
+            where: {
+              answerId: {
+                in: answerIds,
+              },
+            },
+          });
+        }
+
+        // Insert all selected options in one createMany.
+        if (selectedOptionsData.length > 0) {
           await tx.answerOption.createMany({
-            data: evaluated.selectedOptionIds.map((optionId) => ({
-              answerId: evaluated.answerId,
-              optionId,
-            })),
+            data: selectedOptionsData,
             skipDuplicates: true,
           });
         }
-      }
 
-      /*
-       * ----------------------------------------------------------
-       * B. Update ExamAttempt
-       * ----------------------------------------------------------
-       */
+        // B. Update lesson progress.
+        if (attempt.exam.lessonId) {
+          const lessonId = attempt.exam.lessonId;
 
-      await tx.examAttempt.update({
-        where: {
-          id: attempt.id,
-        },
-        data: {
-          score,
-          passed,
-          submittedAt,
-        },
-      });
-
-      /*
-       * ----------------------------------------------------------
-       * C. Update LessonProgress
-       * ----------------------------------------------------------
-       */
-
-      if (attempt.exam.lessonId) {
-        const lessonId = attempt.exam.lessonId;
-        const existingProgress = await tx.lessonProgress.findUnique({
-          where: { studentId_lessonId: { studentId, lessonId } },
-          select: {
-            id: true,
-            status: true,
-            bestScore: true,
-            attemptsCount: true,
-            unlockedAt: true,
-            completedAt: true,
-          },
-        });
-        const previousBestScore = existingProgress?.bestScore ?? 0;
-        const bestScore = Math.max(previousBestScore, score);
-        /* * If the student passed this attempt, * the lesson becomes PASSED. */ if (
-          passed
-        ) {
-          await tx.lessonProgress.upsert({
-            where: { studentId_lessonId: { studentId, lessonId } },
-            create: {
-              studentId,
-              lessonId,
-              status: "PASSED",
-              bestScore,
-              attemptsCount: 1,
-              unlockedAt: existingProgress?.unlockedAt ?? submittedAt,
-              completedAt: submittedAt,
-            },
-            update: {
-              status: "PASSED",
-              bestScore,
-              attemptsCount: { increment: 1 },
-              completedAt: existingProgress?.completedAt ?? submittedAt,
-            },
-          });
-        } else {
-          await tx.lessonProgress.upsert({
+          const existingProgress = await tx.lessonProgress.findUnique({
             where: {
               studentId_lessonId: {
                 studentId,
                 lessonId,
               },
             },
-
-            create: {
-              studentId,
-              lessonId,
-              status: "IN_PROGRESS",
-              bestScore,
-              attemptsCount: 1,
-              unlockedAt: submittedAt,
-            },
-
-            update: {
-              bestScore,
-              attemptsCount: {
-                increment: 1,
-              },
+            select: {
+              id: true,
+              status: true,
+              bestScore: true,
+              attemptsCount: true,
+              unlockedAt: true,
+              completedAt: true,
             },
           });
+
+          const previousBestScore = existingProgress?.bestScore ?? 0;
+          const bestScore = Math.max(previousBestScore, score);
+
+          if (passed) {
+            await tx.lessonProgress.upsert({
+              where: {
+                studentId_lessonId: {
+                  studentId,
+                  lessonId,
+                },
+              },
+              create: {
+                studentId,
+                lessonId,
+                status: "PASSED",
+                bestScore,
+                attemptsCount: 1,
+                unlockedAt: existingProgress?.unlockedAt ?? submittedAt,
+                completedAt: submittedAt,
+              },
+              update: {
+                status: "PASSED",
+                bestScore,
+                attemptsCount: {
+                  increment: 1,
+                },
+                completedAt: existingProgress?.completedAt ?? submittedAt,
+              },
+            });
+          } else {
+            await tx.lessonProgress.upsert({
+              where: {
+                studentId_lessonId: {
+                  studentId,
+                  lessonId,
+                },
+              },
+              create: {
+                studentId,
+                lessonId,
+                status: "IN_PROGRESS",
+                bestScore,
+                attemptsCount: 1,
+                unlockedAt: submittedAt,
+              },
+              update: {
+                bestScore,
+                attemptsCount: {
+                  increment: 1,
+                },
+              },
+            });
+          }
         }
-      }
-      /*
-       * ----------------------------------------------------------
-       * D. Update StudentProfile
-       * ----------------------------------------------------------
-       *
-       * We calculate the statistics from ALL submitted attempts.
-       */
 
-      const submittedAttempts = await tx.examAttempt.findMany({
-        where: {
-          studentId,
-          submittedAt: {
-            not: null,
+        // C. Calculate student statistics in the database.
+        // The aggregate includes this transaction's newly submitted attempt.
+        const submittedAttempts = await tx.examAttempt.aggregate({
+          where: {
+            studentId,
+            submittedAt: {
+              not: null,
+            },
           },
-        },
+          _avg: {
+            score: true,
+          },
+          _count: {
+            _all: true,
+          },
+        });
 
-        select: {
-          score: true,
-        },
-      });
+        const totalAttempts = submittedAttempts._count._all;
+        const overallAverageScore = submittedAttempts._avg.score ?? 0;
+        const strugglingFlag = overallAverageScore < 50;
 
-      const totalAttempts = submittedAttempts.length;
+        // D. Update student profile.
+        await tx.studentProfile.upsert({
+          where: {
+            userId: studentId,
+          },
+          create: {
+            userId: studentId,
+            overallAverageScore,
+            totalAttempts,
+            strugglingFlag,
+          },
+          update: {
+            overallAverageScore,
+            totalAttempts,
+            strugglingFlag,
+          },
+        });
 
-      const overallAverageScore =
-        totalAttempts > 0
-          ? submittedAttempts.reduce((sum, item) => sum + item.score, 0) /
-            totalAttempts
-          : 0;
+        return true;
+      },
+      {
+        maxWait: 10000,
+        timeout: 15000,
+      },
+    );
 
-      /*
-       * Basic adaptive flag.
-       *
-       * This can later be replaced by a more sophisticated
-       * adaptive algorithm based on difficulty, attempts,
-       * lessons and recent performance.
-       */
+    if (!submissionCompleted) {
+      return {
+        success: false,
+        error: "تم تسليم هذا الاختبار بالفعل.",
+      };
+    }
 
-      const strugglingFlag = overallAverageScore < 50;
-
-      await tx.studentProfile.upsert({
-        where: {
-          userId: studentId,
-        },
-
-        create: {
-          userId: studentId,
-          overallAverageScore,
-          totalAttempts,
-          strugglingFlag,
-        },
-
-        update: {
-          overallAverageScore,
-          totalAttempts,
-          strugglingFlag,
-        },
-      });
-    });
-
-    /*
-     * ============================================================
-     * 12. Revalidate affected pages
-     * ============================================================
-     */
-
+    // 12. Revalidate affected pages after the transaction commits.
     if (attempt.exam.lessonId) {
       revalidatePath(`/dashboard/lessons/${attempt.exam.lessonId}`);
     }
@@ -646,15 +550,9 @@ export async function submitQuizAction(
     revalidatePath("/dashboard/lessons");
     revalidatePath("/dashboard/quizzes");
 
-    /*
-     * ============================================================
-     * 13. Return result
-     * ============================================================
-     */
-
+    // 13. Return result.
     return {
       success: true,
-
       result: {
         attemptId: attempt.id,
         attemptNumber: attempt.attemptNumber,

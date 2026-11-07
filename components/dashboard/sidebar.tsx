@@ -150,8 +150,12 @@ export function DashboardSidebar({
   const userInitial = userName.trim().charAt(0) || "؟";
 
   const nav = getNavItems(
-    role === "TEACHER" ? "TEACHER" : "STUDENT",
-  );
+  role === "TEACHER"
+    ? "TEACHER"
+    : role === "ADMIN"
+      ? "ADMIN"
+      : "STUDENT",
+);
 
   const handleNavigate = () => {
     onOpenChange(false);

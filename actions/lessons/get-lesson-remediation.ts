@@ -31,18 +31,17 @@ export function getLessonRemediation({
     return null;
   }
 
-  // الطالب رسب → اعرض Interactive
-  const remediationVariant = contentVariants.find(
-    (variant) => variant.type === "INTERACTIVE",
+  // بعد الرسوب: اعرض Presentation
+  const presentationVariant = contentVariants.find(
+    (variant) => variant.type === "VIDEO",
   );
 
-  // لا يوجد Interactive لهذا الدرس
-  if (!remediationVariant) {
+  if (!presentationVariant) {
     return null;
   }
 
   return {
-    variant: remediationVariant,
+    variant: presentationVariant,
     reason: "LOW_SCORE",
     score: latestAttempt.score,
     attemptNumber: latestAttempt.attemptNumber,

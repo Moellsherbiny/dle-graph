@@ -49,30 +49,29 @@ export const studentMainNavItems: NavItem[] = [
 export const teacherMainNavItems: NavItem[] = [
   {
     label: "لوحة التحكم",
-    href: "/dashboard",
+    href: "/teacher",
     icon: House,
     description: "نظرة عامة على المقرر وأداء الطلاب",
   },
   {
     label: "الدروس",
-    href: "/dashboard/lessons",
+    href: "/teacher/lessons",
     icon: BookOpen,
-    description: "إدارة محتوى الدروس ومتابعة مسار التعلم",
+    description: "إدارة محتوى الدروس",
   },
   {
     label: "الطلاب",
-    href: "/dashboard/students",
+    href: "/teacher/students",
     icon: Persons,
     description: "متابعة الطلاب المسجلين وأدائهم",
   },
   {
     label: "التقدم والنتائج",
-    href: "/dashboard/progress",
+    href: "/teacher/progress",
     icon: ChartColumn,
     description: "تحليل تقدم الطلاب ونتائجهم",
   },
 ];
-
 /* =========================================
    Communication
 ========================================= */
